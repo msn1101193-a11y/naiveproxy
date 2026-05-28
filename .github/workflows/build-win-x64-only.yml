@@ -1,0 +1,115 @@
+name: Build Windows x64 only
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag/ref to build"
+        required: true
+        default: "v109.0.5414.74-2"
+
+permissions:
+  contents: write
+  actions: read
+
+defaults:
+  run:
+    shell: bash
+    working-directory: src
+
+env:
+  CACHE_EPOCH: 1
+  SCCACHE_CACHE_SIZE: 200M
+
+jobs:
+  win-x64:
+    runs-on: windows-2022
+    env:
+      EXTRA_FLAGS: 'target_cpu="x64"'
+      BUNDLE: naiveproxy-${{ github.event.inputs.tag }}-win-x64
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag }}
+
+      - name: Cache toolchains
+        uses: actions/cache@v4
+        with:
+          path: |
+            src/third_party/llvm-build/Release+Asserts/
+            src/gn/
+            ~/.cargo/bin/
+            ~/bin/ninja.exe
+          key: toolchains-win-x64-${{ hashFiles('CHROMIUM_VERSION') }}-v${{ env.CACHE_EPOCH }}
+
+      - name: Cache PGO win64
+        uses: actions/cache@v4
+        with:
+          path: src/chrome/build/pgo_profiles/chrome-win64-*
+          key: pgo-win64-${{ hashFiles('CHROMIUM_VERSION') }}-v${{ env.CACHE_EPOCH }}
+
+      - id: sccache-timestamp
+        run: echo "SCCACHE_TIMESTAMP=$(date +%s)" >>$GITHUB_OUTPUT
+
+      - name: Cache sccache files
+        uses: actions/cache@v4
+        with:
+          path: ~/AppData/Local/Mozilla/sccache
+          key: sccache-win-x64-${{ hashFiles('CHROMIUM_VERSION') }}-${{ steps.sccache-timestamp.outputs.SCCACHE_TIMESTAMP }}
+          restore-keys: sccache-win-x64-${{ hashFiles('CHROMIUM_VERSION') }}-
+
+      - name: Install ninja if missing
+        run: |
+          mkdir -p ~/bin
+          if [ ! -f ~/bin/ninja.exe ]; then
+            curl -LO https://github.com/ninja-build/ninja/releases/download/v1.10.2/ninja-win.zip
+            unzip ninja-win.zip -d ~/bin
+          fi
+
+      - name: Get clang
+        run: ./get-clang.sh
+
+      - name: Reset sccache stats
+        run: |
+          if [ -x ~/.cargo/bin/sccache ]; then
+            ~/.cargo/bin/sccache -z
+          fi
+
+      - name: Build
+        run: ./build.sh
+
+      - name: Show sccache stats
+        run: |
+          if [ -x ~/.cargo/bin/sccache ]; then
+            ~/.cargo/bin/sccache -s
+          fi
+
+      - name: Basic test
+        run: ../tests/basic.sh out/Release/naive
+
+      - name: Pack naiveproxy Windows x64
+        run: |
+          mkdir "${BUNDLE}"
+          if [ -f out/Release/naive.exe ]; then
+            cp out/Release/naive.exe "${BUNDLE}/naive.exe"
+          else
+            cp out/Release/naive "${BUNDLE}/naive.exe"
+          fi
+          cp config.json ../LICENSE ../USAGE.txt "${BUNDLE}/"
+          7z a "${BUNDLE}.zip" "${BUNDLE}"
+          openssl sha256 "${BUNDLE}/naive.exe" > sha256sum.txt
+          cat sha256sum.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: naiveproxy-${{ github.event.inputs.tag }}-win-x64
+          path: |
+            src/naiveproxy-${{ github.event.inputs.tag }}-win-x64.zip
+            src/sha256sum.txt
+
+      - name: Upload to release
+        run: gh release upload "${{ github.event.inputs.tag }}" "${BUNDLE}.zip" --clobber
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
