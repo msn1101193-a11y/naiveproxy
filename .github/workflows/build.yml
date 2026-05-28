@@ -1,4 +1,4 @@
-name: Build Windows x64 only
+name: Build only Windows x64 v109
 
 on:
   push:
@@ -59,26 +59,52 @@ jobs:
       - name: Get clang
         run: ./get-clang.sh
 
-      - name: Reset sccache stats
-        run: ~/.cargo/bin/sccache -z || true
-
-      - name: Install Windows SDK 20348
+      - name: Alias installed Windows SDK as 10.0.20348.0
         shell: pwsh
         run: |
-          $installer = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vs_installer.exe"
-          if (!(Test-Path "C:\Program Files (x86)\Windows Kits\10\Include\10.0.20348.0\um")) {
-            Start-Process -FilePath $installer -ArgumentList @(
-              "modify",
-              "--installPath", "C:\Program Files\Microsoft Visual Studio\2022\Enterprise",
-              "--add", "Microsoft.VisualStudio.Component.Windows10SDK.20348",
-              "--quiet",
-              "--norestart",
-              "--nocache"
-            ) -Wait -NoNewWindow
+          $ErrorActionPreference = "Stop"
+
+          $kits = "C:\Program Files (x86)\Windows Kits\10"
+          $need = "10.0.20348.0"
+
+          foreach ($sub in @("Include", "Lib", "bin")) {
+            $root = Join-Path $kits $sub
+            if (!(Test-Path $root)) {
+              Write-Host "SKIP missing root $root"
+              continue
+            }
+
+            $targetDir = Get-ChildItem $root -Directory |
+              Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } |
+              Sort-Object { [version]$_.Name } -Descending |
+              Select-Object -First 1
+
+            if (!$targetDir) {
+              throw "No SDK version directory found in $root"
+            }
+
+            $dst = Join-Path $root $need
+            if (!(Test-Path $dst)) {
+              cmd /c mklink /J "$dst" "$($targetDir.FullName)"
+            }
+
+            if (!(Test-Path $dst)) {
+              throw "Failed to create SDK alias $dst"
+            }
+
+            Write-Host "$sub alias: $dst -> $($targetDir.FullName)"
           }
+
           if (!(Test-Path "C:\Program Files (x86)\Windows Kits\10\Include\10.0.20348.0\um")) {
-            throw "Windows SDK 10.0.20348.0 was not installed"
+            throw "SDK alias include\um missing"
           }
+
+          if (!(Test-Path "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.20348.0\um\x64")) {
+            throw "SDK alias lib\um\x64 missing"
+          }
+
+      - name: Reset sccache stats
+        run: ~/.cargo/bin/sccache -z || true
 
       - name: Build
         run: ./build.sh
@@ -110,8 +136,7 @@ jobs:
           path: |
             src/naiveproxy-v109.0.5414.74-2-win-x64.zip
             src/sha256sum.txt
-
-      - name: Upload to release
+[28.05.2026 17:55] Вова Вертограцкий: - name: Upload to release
         run: gh release upload "$BUILD_TAG" "$BUNDLE.zip" --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
