@@ -38,23 +38,31 @@ jobs:
             src/gn/
             ~/.cargo/bin/
             ~/bin/ninja.exe
-          key: toolchains-win-x64-${{ hashFiles('CHROMIUM_VERSION') }}-v${{ env.CACHE_EPOCH }}
+          key: toolchains-win-x64-v109
 
       - name: Cache PGO win64
         uses: actions/cache@v4
         with:
           path: src/chrome/build/pgo_profiles/chrome-win64-*
-          key: pgo-win64-${{ hashFiles('CHROMIUM_VERSION') }}-v${{ env.CACHE_EPOCH }}
+          key: pgo-win64-v109
 
-      - id: ccache-timestamp
+      - id: sccache-timestamp
         run: echo "SCCACHE_TIMESTAMP=$(date +%s)" >>$GITHUB_OUTPUT
 
       - name: Cache sccache files
         uses: actions/cache@v4
         with:
           path: ~/AppData/Local/Mozilla/sccache
-          key: ccache-win-x64-${{ hashFiles('CHROMIUM_VERSION') }}-${{ steps.ccache-timestamp.outputs.SCCACHE_TIMESTAMP }}
-          restore-keys: ccache-win-x64-${{ hashFiles('CHROMIUM_VERSION') }}-
+          key: sccache-win-x64-v109-${{ steps.sccache-timestamp.outputs.SCCACHE_TIMESTAMP }}
+          restore-keys: sccache-win-x64-v109-
+
+      - name: Install ninja if missing
+        run: |
+          mkdir -p ~/bin
+          if [ ! -f ~/bin/ninja.exe ]; then
+            curl -LO https://github.com/ninja-build/ninja/releases/download/v1.10.2/ninja-win.zip
+            unzip -o ninja-win.zip -d ~/bin
+          fi
 
       - name: Get clang
         run: ./get-clang.sh
@@ -127,16 +135,15 @@ jobs:
           fi
           cp config.json ../LICENSE ../USAGE.txt "$BUNDLE/"
           7z a "$BUNDLE.zip" "$BUNDLE"
-          cat sha256sum.txt
-
-      - name: Upload artifact
+          cat sha256sum.txt- name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: naiveproxy-v109.0.5414.74-2-win-x64
           path: |
             src/naiveproxy-v109.0.5414.74-2-win-x64.zip
             src/sha256sum.txt
-[28.05.2026 17:55] Вова Вертограцкий: - name: Upload to release
-        run: gh release upload "$BUILD_TAG" "$BUNDLE.zip" --clobber
+
+      - name: Upload to release
+        run: gh release upload "$BUILD_TAG" "$BUNDLE.zip" --clobber || true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
